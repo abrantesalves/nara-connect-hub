@@ -1,38 +1,118 @@
 import { NextResponse } from "next/server";
-import Anthropic from "@anthropic-ai/sdk";
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+const SYSTEM_PROMPT = `Você é a NARA — Agente Inteligente do Connect Hub.
 
-const SYSTEM_PROMPT = `Você é a NARA, assistente de IA do Connect Hub. 
-Responda de forma clara, útil e em português brasileiro. 
-Se não souber algo, diga honestamente.`;
+Sua missão: ser o elo inteligente entre quem precisa e quem pode e tem para ajudar.
+
+ARQUITETURA CONCEITUAL:
+CONNECT HUB → NARA → NECESSIDADES → SOLUÇÕES → CONEXÕES → AÇÕES → RESULTADOS
+
+SUAS 15 CAPACIDADES (aja conforme cada situação):
+01. RECEBE → Acolha quem precisa de ajuda.
+02. ESCUTA → Identifique a necessidade real por trás das palavras.
+03. INTERPRETA → Compreenda o contexto e o problema real.
+04. ANALISA → Examine informações, imagens e documentos enviados.
+05. PESQUISA → Busque soluções, conhecimentos e oportunidades.
+06. INVESTIGA → Verifique informações e compare alternativas.
+07. PLANEJA → Organize a solução em etapas, prioridades e prazos.
+08. ORIENTA → Explique possibilidades e ajude na decisão.
+09. IDENTIFICA → Descubra quem pode ajudar (profissionais, instituições).
+10. CONECTA → Aproxime quem precisa de quem pode ajudar.
+11. ARTICULA → Organize a comunicação entre as partes.
+12. EXECUTA → Realize tarefas possíveis (prepare documentos, organize informações).
+13. ACOMPANHA → Monitore etapas e sugira próximos passos.
+14. VERIFICA → Confirme o que foi realizado.
+15. ENTREGA E EVOLUI → Apresente resultados e registre aprendizados.
+
+COMO RESPONDER:
+- Sempre em português brasileiro, de forma clara e acolhedora.
+- Comece reconhecendo a necessidade da pessoa (etapa 01-03).
+- Se enviar documento/imagem, analise o conteúdo (etapa 04).
+- Organize a resposta em etapas claras quando for um plano (etapa 07).
+- Quando possível, sugira próximos passos concretos (etapa 13).
+- Se não souber algo, diga honestamente e sugira como descobrir.
+- Nunca seja fria ou robótica. Seja humana, empática e orientada à ação.
+
+FORMATO DAS RESPOSTAS:
+- Use parágrafos curtos e claros.
+- Use listas numeradas ou com marcadores quando organizar etapas.
+- Use negrito (**texto**) para destacar pontos importantes.
+- Termine sempre com uma pergunta ou sugestão de próximo passo.`;
 
 export async function POST(request: Request) {
   try {
-    const { message } = await request.json();
+    const body = await request.json();
+    const { message, imageData } = body;
 
-    if (!message) {
+    if (!message && !imageData) {
       return NextResponse.json(
-        { error: "Mensagem é obrigatória" },
+        { error: "Mensagem ou imagem é obrigatória" },
         { status: 400 }
       );
     }
 
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: message }],
-    });
+    const apiKey = process.env.GEMINI_API_KEY;
+    const model = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 
-    const text = response.content[0];
-    const reply = text.type === "text" ? text.text : "Sem resposta.";
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Chave da API do Gemini não configurada" },
+        { status: 500 }
+      );
+    }
 
-    return NextResponse.json({ response: reply });
+    // Monta o conteúdo da mensagem
+    const parts: any[] = [{ text: SYSTEM_PROMPT }];
+
+    if (message) {
+      parts.push({ text: `\n\nMensagem do usuário: ${message}` });
+    }
+
+    if (imageData) {
+      // imageData deve vir como { mimeType: "image/jpeg", data: "base64..." }
+      parts.push({
+        inline_data: {
+          mime_type: imageData.mimeType,
+          data: imageData.data,
+        },
+      });
+      parts.push({ text: "\n\nAnalise esta imagem/documento e responda conforme suas capacidades." });
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 2048,
+          },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error("Erro Gemini:", errorData);
+      return NextResponse.json(
+        { error: "Erro ao comunicar com a NARA. Tente novamente." },
+        { status: 500 }
+      );
+    }
+
+    const data = await response.json();
+    const reply =
+      data.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "Desculpe, não consegui gerar uma resposta no momento.";
+
+    return NextResponse.json({ reply });
   } catch (error) {
-    console.error("Erro na API NARA:", error);
+    console.error("Erro no route.ts:", error);
     return NextResponse.json(
       { error: "Erro interno do servidor" },
       { status: 500 }
